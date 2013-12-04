@@ -1,0 +1,927 @@
+	   title     "assignment3"
+	   list      p=16f877a
+	   include   "p16f877a.inc"
+
+	__CONFIG _CP_OFF & _WDT_OFF & _BODEN_OFF & _PWRTE_ON & _HS_OSC & _WRT_OFF & _LVP_OFF & _CPD_OFF
+
+; '__CONFIG' directive is used to embed configuration data within .asm file.
+; The lables following the directive are located in the respective .inc file.
+; See respective data sheet for additional information on configuration word.
+; Remember there are TWO underscore characters before the word CONFIG.
+
+;*******************************************************************
+;
+;  							 assignment2.ASM
+;            				Embedded Systems
+;
+; Description
+;    generate a specialised 
+;    repetitive timing waveform for a piece of test equipment.
+;    .
+;
+; Method
+;    repeating set of cycles.
+;
+; Version
+;    J Bouis    V1.0   November 2013
+;******************************************************************* 
+;*******************************************************************    
+;
+; Constant declarations
+; =====================
+;
+#define latch PORTB,2 ; Slave Select (RA5)
+#define Data PORTB,0
+#define Clock PORTB,1
+ClockValue equ d'8'
+AAAAA     equ     d'13'           ; comment
+BBBBB     equ     b'10101100'     ; comment
+CCCCC     equ     h'3F'           ; comment
+;
+;******************************************************************* 
+;*******************************************************************    
+;
+; Variable declarations  : User RAM area starts at location h'20' for PIC16F877a
+; =====================
+;
+w_temp		equ	h'7D'		; variable used for context saving 
+status_temp	equ	h'7E'		; variable used for context saving
+pclath_temp	equ	h'7F'		; variable used for context saving
+delcnt 	EQU 0x29 
+delcnt2	EQU 0x35				; Counter variable - sent to SPI
+var 	EQU 0x30 				; Delay Variable (low byte)
+var1 EQU 0x31
+var2	 EQU 0x32  				; Delay Variable (high byte)
+add equ 0x33
+a equ 0x34
+c equ 0x37
+presses2 equ 0x38
+temp	equ 0x39
+
+;variable1       equ     h'20'
+;variable2       equ     h'21'
+; My variable declaration
+presses     equ   h'20'        ; used for switch debounce
+;delcnt      equ   h'21'        ; parameter register for del500us routine
+count       equ   h'22'
+count2      equ   h'23'
+flag1		equ	  h'24'
+flag2		equ   h'25'	
+variable1	equ   h'26'
+variable2   equ   h'27'
+variable3	equ   h'40'
+variable4   equ   h'41'
+variable5	equ   h'42'
+variable6   equ   h'43'
+variable7	equ   h'44'
+variable8   equ   h'45'
+compare     equ   h'28'
+flagtest		equ   d'0'
+
+;
+;*******************************************************************
+;******************************************************************* 
+; Initial system vector.
+;   
+	org     h'00'                   ; initialise system restart vector
+	clrf 	STATUS
+	clrf 	PCLATH			; needed for TinyBootloader functionality
+	goto    start
+
+;******************************************************************* 
+;******************************************************************* 
+; interrupt vector
+;
+	org	h'04'
+	goto	int_routine
+
+;******************************************************************* 
+;******************************************************************* 
+;
+; System subroutines.
+;  
+	org     h'05'           ; start of program space
+;
+;******************************************************************* 
+;******************************************************************* 
+; System functions
+;******************************************************************* 
+;
+;* Init : initialise I/O ports and variables
+;  ====
+; Notes
+;      ............................
+;
+Init    
+	bsf     STATUS, RP0        ; enable page 1 register set
+	bcf		STATUS, RP1
+
+	movlw	h'07'
+	movwf	ADCON1		   ; set PORTA to be digital rather than analogue
+
+	movlw   b'000001'
+	movwf   TRISA              ; set port A  
+	movlw   b'00111000'                 
+	movwf   TRISB              ; set port B 
+	movlw   b'11111000'                 
+	movwf   TRISC              ; set port C 
+	movlw   b'00000001'                 
+	movwf   TRISD              ; set port D 
+	bcf     STATUS, RP0        ; back to page 0 register set
+
+	movlw b'00000001'			;
+	movwf var
+	movlw b'00001100'			; shutdown mode normal operation
+	movwf add
+	call Send_DT
+
+	movlw b'00001111'
+	movwf var
+	movlw b'00001001'			; decode mode for 4 digits
+	movwf add
+	call Send_DT
+
+	movlw b'00000100'
+	movwf var
+	movlw b'00001011'			; scan on 4 digits
+	movwf add
+	call Send_DT
+
+	movlw b'00001110'
+	movwf var
+	movlw b'00001010'			; intensity set up
+	movwf add
+	call Send_DT
+	call Send_reset
+	
+;
+; initialise program variables
+;
+;	clrf	variable1          ; ensure that no delay command is active
+
+	return
+;******************************************************************* 
+;
+;  int_routine : routine to handle the single interrupt
+;  ===========
+; Notes
+;      ............................
+;
+int_routine
+	movwf   w_temp            ; save off current W register contents
+	movf	STATUS,w          ; move status register into W register
+	movwf	status_temp       ; save off contents of STATUS register
+	movf	PCLATH,w	  ; move pclath register into w register
+	movwf	pclath_temp	  ; save off contents of PCLATH register
+;
+; Your interrupt code goes HERE
+;
+	movf	pclath_temp,w	  ; retrieve copy of PCLATH register
+	movwf	PCLATH		  ; restore pre-isr PCLATH register contents
+	movf    status_temp,w     ; retrieve copy of STATUS register
+	movwf	STATUS            ; restore pre-isr STATUS register contents
+	swapf   w_temp,f
+	swapf   w_temp,w          ; restore pre-isr W register contents
+	retfie 
+;*******************************************************************    
+;
+; ***************** Reset subroutine********************************
+;
+Send_reset
+	movlw b'00000000'
+	movwf var
+	movlw b'00000001'			; set digit 1 to 0
+	movwf add
+	call Send_DT
+
+	movlw b'00000000'
+	movwf var
+	movlw b'00000010'			; set digit 2 to 0
+	movwf add
+	call Send_DT
+
+	movlw b'00000000'
+	movwf var
+	movlw b'00000011'			; set digit 3 to 0
+	movwf add
+	call Send_DT
+
+	movlw b'00000000'
+	movwf var
+	movlw b'00000100'			; set digit 4 to 0
+	movwf add
+	call Send_DT
+	clrf variable1
+	clrf variable2
+goto start1
+;
+; ***************** Reset subroutine********************************
+;
+delClock				;call = 2us
+	movlw	d'160'		;+1	
+	movfw	a			;+1
+	movlw	d'192'		;+1
+	movwf	delcnt		;+1	(6)
+del2						
+	nop					;+192 (198)
+	decfsz	delcnt,f	;+193 (391)
+	goto 	del2		;+385 (776)
+	decfsz	a,f			;+124160 (124936)
+	goto	delClock	;+124930 (249866)=250ms
+return
+;
+; ***************** Reset subroutine********************************
+;
+delClockT
+	call delClock
+	call delClock
+	call delClock
+	call delClock
+	call delClock 		;= 1s
+
+return
+
+delClockT2
+	call delClock
+	call delClock
+	call delClock 		;= 1s
+
+return
+;
+; ***************** Reset subroutine********************************
+;
+delClock2				;call = 2us
+	movlw	d'192'		;+1
+	movwf	delcnt2		;+1	(4)
+del3						
+	nop					;+192 (196)
+	decfsz	delcnt2,f	;+193 (389)
+	goto 	del3		;+385 (774)
+return					;+2	  (776)
+;
+; ***************** Reset subroutine********************************
+;
+
+Send_DT 
+	movlw d'8'
+	movwf var1
+	movlw d'8'
+	movwf var2
+loop
+	rlf add,f
+	btfss STATUS,C
+	bcf	Data
+	btfsc STATUS,C
+	bsf Data
+	bsf Clock
+	call delClock2
+	bcf Clock
+	decfsz var1,f
+	goto loop
+loop1
+	rlf var,f
+	btfss STATUS,C
+	bcf	Data
+	btfsc STATUS,C
+	bsf Data
+	bsf Clock
+	call delClock2
+	bcf Clock
+	decfsz var2,f
+	goto loop1
+	bsf latch
+	nop
+	bcf latch
+return
+;
+; ***************** Reset subroutine********************************
+;
+readcountStop
+	btfsc	PORTB,d'5'	;skip the next instruction if the value on PORTB is 0 
+	goto	counter1
+return
+;
+; ***************** Reset subroutine********************************
+;
+read_stop				
+	btfsc	PORTB,d'3'	;skip the next instruction if the value on PORTB is 0 
+	goto 	stop	
+return
+;
+; ***************** Reset subroutine********************************
+;	
+stop
+	call delClockT	
+	movlw d'53'
+	movwf var
+	movlw b'00000000'
+	movwf add
+	call Send_DT
+	movlw d'48'
+	movwf var
+	movlw b'00000000'
+	movwf add
+	call Send_DT
+	btfss	PORTB,d'3'	
+	goto stop
+return
+;
+; ***************** Reset subroutine********************************
+;
+Read_reset
+	btfsc	PORTB,d'4'	;skip the next instruction if the value on PORTB is 0 
+	goto	Send_reset
+return
+;
+; ***************** Reset subroutine********************************
+;			
+counter1
+	incfsz variable5 
+	call Read_reset
+	call read_stop
+;	call countertest
+	movf variable6,W
+	subwf variable5,W
+	btfsc STATUS,Z
+	goto counterStop
+	movlw D'0'				
+	subwf variable1,W
+	btfsc STATUS,Z
+	goto  v0 				; oui
+	movlw D'1'				; no
+	subwf variable1,W		; =1
+	btfsc STATUS,Z		
+	goto v1				; yes
+	movlw D'2'				; no ;  =2  ?
+	subwf variable1,W
+	btfsc STATUS,Z
+	goto v2				; yes
+	movlw D'3'				; no ;  = 3 ?
+	subwf variable1,W
+	btfsc STATUS,Z
+	goto v3				; yes 
+	movlw D'4'				; no ;  = 4 ?
+	subwf variable1,W
+	btfsc STATUS,Z
+	goto v4				; yes
+	movlw D'5'				; no ;  = 5 ?
+	subwf variable1,W
+	btfsc STATUS,Z
+	goto v5				; yes
+	movlw D'6'				; no ;  = 6 ?
+	subwf variable1,W
+	btfsc STATUS,Z
+	goto v6	
+		
+v0		
+	clrf variable7						
+	movlw b'00000000'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT
+	call delClockT	
+	incfsz variable1 
+	movlw b'00110000'
+	movwf variable7
+	goto counter1
+
+
+v1		
+	clrf variable7			
+	movlw b'00000001'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT
+	call delClockT
+	incfsz variable1 
+	movlw b'00110001'
+	movwf variable7
+	goto counter1
+
+v2	
+	clrf variable7				
+	movlw b'00000010'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT		;
+	call delClockT
+	movlw b'00110010'
+	movwf variable7
+	incfsz variable1 
+	goto counter1
+
+v3	
+	clrf variable7				
+	movlw b'00000011'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT	; 
+	call delClockT
+	movlw b'00110011'
+	movwf variable7
+	incfsz variable1 
+	goto counter1
+
+v4	
+	clrf variable7			
+	movlw b'00000100'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT		; )
+	call delClockT
+	movlw b'00110100'
+	movwf variable7
+	incfsz variable1 
+	goto counter1
+
+v5	
+	clrf variable7					
+	movlw b'00000101'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT		; 
+	call delClockT
+	movlw b'00110101'
+	movwf variable7
+	incfsz variable1 
+	goto counter1
+
+v6		
+	clrf variable7			
+	movlw b'00000110'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT		; 
+	call delClockT
+	movf variable2,W
+	subwf variable1,W
+	btfsc STATUS,Z	
+	goto valueMAX	
+	movlw b'00110110'
+	movwf variable7
+	incfsz variable2
+	clrf variable1
+	movlw b'00000000'
+	movwf var
+	movlw b'00000001'
+	movwf add
+	call Send_DT
+	goto counter2
+	
+	
+	
+
+counter2
+		
+	movlw D'0'				
+	subwf variable2,W
+	btfsc STATUS,Z
+	goto  d0 				; oui
+	movlw D'1'
+	subwf variable2,W		; =1
+	btfsc STATUS,Z		
+	goto d1				; yes
+	movlw D'2'				; no ;  =2  ?
+	subwf variable2,W
+	btfsc STATUS,Z
+	goto d2				; yes
+	movlw D'3'				; no ;  = 3 ?
+	subwf variable2,W
+	btfsc STATUS,Z
+	goto d3				; yes 
+	movlw D'4'				; no ;  = 4 ?
+	subwf variable2,W
+	btfsc STATUS,Z
+	goto d4				; yes
+	movlw D'5'				; no ;  = 5 ?
+	subwf variable2,W
+	btfsc STATUS,Z
+	goto d5				; yes
+	movlw D'6'				; no ;  = 6 ?
+	subwf variable2,W
+	btfsc STATUS,Z
+	goto d6	
+
+d0		
+	clrf variable8				
+	movlw b'00000000'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT
+	movlw b'00110000'
+	movwf variable8
+	incfsz variable2 
+	goto counter1
+
+
+d1	
+	clrf variable8		
+	clrf variable1				
+	movlw b'00000001'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT
+	movlw b'00110001'
+	movwf variable8
+	;	incfsz variable1
+	goto counter1
+
+d2	
+	clrf variable8		
+	clrf variable1				
+	movlw b'00000010'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT
+	movlw b'00110010'
+	movwf variable8
+	goto counter1
+
+d3	
+	clrf variable8				
+	clrf variable1	
+	movlw b'00000011'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT		; 
+	movlw b'00110011'
+	movwf variable8
+	goto counter1
+
+d4	
+	clrf variable8			
+	clrf variable1		
+	movlw b'00000100'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT		; 
+	movlw b'00110100'
+	movwf variable8
+	goto counter1
+
+d5	
+	clrf variable8		
+	clrf variable1					
+	movlw b'00000101'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT			; 
+	movlw b'00110101'
+	movwf variable8
+	goto counter1
+
+d6	
+	clrf variable8						
+	movlw b'00000110'
+	movwf var
+	movlw b'00000010'
+	movwf add
+	call Send_DT
+	movlw b'00110110'
+	movwf variable8
+	call counter1
+			; 
+valueMAX
+	btfsc	PORTB,d'4'	;skip the next instruction if the value on PORTB is 0 
+	goto	counter1
+	goto	valueMAX
+
+counterStop
+	movlw b'00000000'    ;0
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	movlw b'00000000'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	call delClockT
+	movlw b'00000001'    ;1
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	bsf  PORTC,0
+	call delClockT
+	movlw b'00000010'   ;2
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	bcf  PORTC,0
+	bsf  PORTC,1
+	call delClockT
+		movlw b'00000011'   ;3
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	bsf  PORTC,0
+	call delClockT
+	movlw b'00000100'   ;4
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	bcf  PORTC,0
+	bcf  PORTC,1
+	bsf  PORTC,2
+	call delClockT
+	movlw b'00000101'  ;5
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	bsf  PORTC,0
+	call delClockT
+	movlw b'00000110'    ;6
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	bcf  PORTC,0
+	bsf  PORTC,1
+	call delClockT	
+	clrf variable6
+	bcf  PORTC,2
+	bcf  PORTC,1
+	goto counter1
+	
+
+
+
+incr1  ;test
+	incfsz variable6 
+	call readcountStop
+	call Read_reset
+	movlw D'0'				
+	subwf variable3,W
+	btfsc STATUS,Z
+	goto  g0 				; oui
+	movlw D'1'				; no
+	subwf variable3,W		; =1
+	btfsc STATUS,Z		
+	goto g1					; yes
+	movlw D'2'				; no ;  =2  ?
+	subwf variable3,W
+	btfsc STATUS,Z
+	goto g2					; yes
+	movlw D'3'				; no ;  = 3 ?
+	subwf variable3,W
+	btfsc STATUS,Z
+	goto g3					; yes 
+	movlw D'4'				; no ;  = 4 ?
+	subwf variable3,W
+	btfsc STATUS,Z
+	goto g4					; yes
+	movlw D'5'				; no ;  = 5 ?
+	subwf variable3,W
+	btfsc STATUS,Z
+	goto g5					; yes
+	movlw D'6'				; no ;  = 6 ?
+	subwf variable3,W
+	btfsc STATUS,Z
+	goto g6	
+
+incr2  ;test
+		movlw D'0'				
+	subwf variable4,W
+	btfsc STATUS,Z
+	goto  h0 				; oui
+	movlw D'1'
+	subwf variable4,W		; =1
+	btfsc STATUS,Z		
+	goto h1					; yes
+	movlw D'2'				; no ;  =2  ?
+	subwf variable4,W
+	btfsc STATUS,Z
+	goto h2					; yes
+	movlw D'3'				; no ;  = 3 ?
+	subwf variable4,W
+	btfsc STATUS,Z
+	goto h3				; yes 
+	movlw D'4'				; no ;  = 4 ?
+	subwf variable4,W
+	btfsc STATUS,Z
+	goto h4				; yes
+	movlw D'5'				; no ;  = 5 ?
+	subwf variable4,W
+	btfsc STATUS,Z
+	goto h5				; yes
+	movlw D'6'				; no ;  = 6 ?
+	subwf variable4,W
+	btfsc STATUS,Z
+	goto h6	
+
+
+
+g0						
+	movlw b'00000000'
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	call delClockT2	
+	incfsz variable3 
+	goto incr1
+
+g1	
+;	clrf variable1				
+	movlw b'00000001'
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	call delClockT2		
+	incfsz variable3 
+	goto incr1
+
+g2	
+;	clrf variable1				
+	movlw b'00000010'
+	movwf var
+	movlw b'00000011'
+	movwf add
+		call Send_DT
+	call delClockT2
+	incfsz variable3 
+	goto incr1
+
+g3			
+;	clrf variable1	
+	movlw b'00000011'
+	movwf var
+	movlw b'00000011'
+	movwf add
+		call Send_DT
+	call delClockT2
+	incfsz variable3 
+	goto incr1
+
+g4		
+;	clrf variable1		
+	movlw b'00000100'
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	call delClockT2
+	incfsz variable3 
+	goto incr1
+
+g5	
+;	clrf variable1					
+	movlw b'00000101'
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	call delClockT2	; 
+	incfsz variable3 
+	goto incr1
+
+g6					
+	movlw b'00000110'
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	call delClockT2
+	movf variable4,W
+	subwf variable3,W
+	btfsc STATUS,Z	
+	goto start1
+	incfsz variable4
+	clrf variable3
+	movlw b'00000000'
+	movwf var
+	movlw b'00000011'
+	movwf add
+	call Send_DT
+	goto incr2
+
+h0			
+	clrf variable3				
+	movlw b'00000000'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+		movlw D'0'				
+	addwf variable4,W
+	goto incr1
+
+
+h1	
+	clrf variable3			
+	movlw b'00000001'
+	movwf var
+	movlw b'00000100'
+	movwf add
+		call Send_DT
+	call delClockT2
+	goto incr1
+
+h2	
+		clrf variable3				
+	movlw b'00000010'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	call delClockT2		
+
+	goto incr1
+
+h3			
+	clrf variable3	
+	movlw b'00000011'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	call delClockT2		
+	goto incr1
+
+h4		
+	clrf variable3		
+	movlw b'00000100'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	call delClockT2		
+	goto incr1
+
+h5	
+	clrf variable3					
+	movlw b'00000101'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	call delClockT2	
+		goto incr1
+
+h6					
+	movlw b'00000110'
+	movwf var
+	movlw b'00000100'
+	movwf add
+	call Send_DT
+	call delClockT2	
+	goto incr1
+	
+
+;
+;
+;******************************************************************* 
+;*******************************************************************   
+;
+; MAIN program
+; ============
+;
+start
+	call Init
+	bcf  PORTC,0
+	bcf  PORTC,1
+	bcf  PORTC,2
+start1
+	movlw d'0'
+	movwf variable5
+	movlw d'0'
+	movwf variable6
+	clrf variable3
+	clrf variable7
+	clrf variable8
+	clrf variable4
+	call incr1
+start2
+	clrf variable1
+	clrf variable2
+	call counter1	
+	goto start2
+	
+	
+
+;
+;******************************************************************* 
+;
+; Program complete.
+;
+	END
